@@ -5,6 +5,7 @@ Very open to open-source collaboration for improving the repo! If it gets enough
 
 ## Requirements:
 pytorch, transformers, sentencepiece
+Also flash-attn if you are going to use the SelfFlashAttention class - `config._attn_implementation = 'flash_attention_2'`
 
 Training scripts, vision version, and documentation coming soon!
 
