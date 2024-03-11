@@ -12,7 +12,7 @@ from transformers import (
 from transformers.modeling_outputs import MoeModelOutputWithPast, SequenceClassifierOutput
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from attention import SelfAttention, SelfFlashAttention
+from attention import SelfAttention, SelfFlashAttention, SelfVisionAttention
 from moe_blocks import SentenceTopKMoeBlock, TokenTopKMoeBlock, MLP
 
 
@@ -36,11 +36,16 @@ class RMSNorm(nn.Module):
 class BitformerLayer(nn.Module):
     def __init__(self, config, layer_idx: Optional[int] = None):
         super().__init__()
-        self.hidden_size = config.hidden_size
-        if config._attn_implementation == 'flash_attention_2':
+        if config.attention_type == 'flash_attention_2':
+            config._attn_implementation = 'flash_attention_2'
             self.self_attn = SelfFlashAttention(config, layer_idx=layer_idx)
+        elif config.attention_type == 'vision':
+            config._attn_implementation = 'sdpa'
+            self.self_attn = SelfVisionAttention(config, layer_idx=layer_idx)
         else:
+            config._attn_implementation = 'sdpa'
             self.self_attn = SelfAttention(config, layer_idx=layer_idx)
+        self.hidden_size = config.hidden_size
         self.moe = config.moe
         if config.moe:
             if config.is_causal:

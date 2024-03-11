@@ -1,37 +1,45 @@
 import torch
 import numpy as np
+from torch.utils.data import Dataset as TorchDataset
 from datasets import load_dataset
-from torchvision import transforms
 
 
-def get_mnist(norm=True):
-    train_dataset = load_dataset('mnist', split='train')
-    test_dataset = load_dataset('mnist', split='test')
+def calculate_mean_std(dataset):
+    imgs = [np.array(img) for img in dataset['image']]
+    mean = np.mean(imgs)
+    std = np.std(imgs)
+    return mean, std
 
-    def calculate_mean_std(dataset):
-        pixel_values = torch.tensor(np.array([np.array(item['image']).flatten() for item in dataset]),
-                                    dtype=torch.float32)
-        mean = pixel_values.mean()
-        std = pixel_values.std()
-        return mean, std
-    
-    def data_collator(batch):
-        pixel_values = torch.stack([item['pixel_values'] for item in batch])
-        labels = torch.tensor([item['label'] for item in batch])
-        return {'inputs_embeds': pixel_values, 'labels': labels}
 
-    if norm:
-        train_mean, train_std = calculate_mean_std(train_dataset)
+class VisionDataset(TorchDataset):
+    def __init__(self, dataset, mean=1, std=1, norm=False):
+        self.dataset = dataset
+        self.size = np.array(self.dataset[0]['image']).shape[0]
+        self.imgs = [np.array(img).reshape(self.size, self.size) for img in self.dataset['image']]
+        self.labels = [label for label in self.dataset['label']]
         
-        test_mean, test_std = calculate_mean_std(test_dataset)
-        train_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=train_mean, std=train_std)])
-        test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=test_mean, std=test_std)])
-    else:
-        train_transform = transforms.Compose([transforms.ToTensor()])
-        test_transform = transforms.Compose([transforms.ToTensor()])
-
-    train_dataset.set_transform(lambda x: {'pixel_values': train_transform(np.array(x['image']))})
-    test_dataset.set_transform(lambda x: {'pixel_values': test_transform(np.array(x['image']))})
+        if norm:  
+            self.imgs = [(img - mean) / std for img in self.imgs]
     
-    return train_dataset, test_dataset, data_collator
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        img = torch.tensor(self.imgs[idx], dtype=torch.float32)
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        return {'inputs_embeds': img, 'labels': label}
 
+
+def vision_collator(batch):
+    embeds = torch.stack([item['inputs_embeds'].squeeze(0) for item in batch])
+    labels = torch.tensor([item['labels'] for item in batch])
+    return {'inputs_embeds': embeds, 'labels': labels}
+
+
+def get_vision_dataset(data_path, norm=True):
+    dataset = load_dataset(data_path)
+    train_dataset, test_dataset = dataset['train'], dataset['test']
+    train_mean, train_std = calculate_mean_std(train_dataset)
+    train_dataset = VisionDataset(train_dataset, train_mean, train_std, norm=norm)
+    test_dataset = VisionDataset(test_dataset, train_mean, train_std, norm=norm)
+    return train_dataset, test_dataset

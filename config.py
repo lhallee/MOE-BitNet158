@@ -29,6 +29,7 @@ class BitformerConfig(PretrainedConfig):
         num_local_experts=8,
         output_router_logits=True,
         router_aux_loss_coef=0.001,
+        attention_type='sdpa',
         is_causal=False, #GPT or BERT
         moe=True, # MOE or not
         bitnet=True, #bitlinear or not
@@ -59,6 +60,7 @@ class BitformerConfig(PretrainedConfig):
         self.output_router_logits = output_router_logits
         self.router_aux_loss_coef = router_aux_loss_coef
 
+        self.attention_type = attention_type
         self.is_causal = is_causal
         self.moe = moe
         self.bitnet = bitnet
