@@ -32,7 +32,6 @@ class BitformerConfig(PretrainedConfig):
         is_causal=False, #GPT or BERT
         moe=True, # MOE or not
         bitnet=True, #bitlinear or not
-
         **kwargs,
     ):
         self.vocab_size = vocab_size

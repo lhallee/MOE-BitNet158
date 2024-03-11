@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 
 # Adapted from https://github.com/AlarioAI/BitNet/blob/main/bitnet/bitlinear.py
 class BitLinear(nn.Linear):
@@ -50,7 +52,7 @@ class BitLinear(nn.Linear):
 
         binarized_weights = self.binarize_weights(weight_abs_mean)
         input_quant = self.quantize_activations(normalized_input, input_gamma)
-        output = torch.nn.functional.linear(input_quant, binarized_weights, self.bias)
+        output = F.linear(input_quant, binarized_weights, self.bias)
         output = self.dequantize_activations(output, input_gamma, weight_abs_mean)
 
         return output
