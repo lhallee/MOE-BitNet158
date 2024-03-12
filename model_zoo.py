@@ -9,7 +9,7 @@ from transformers import (
     MixtralForSequenceClassification,
     PreTrainedModel
 )
-from transformers.modeling_outputs import MoeModelOutputWithPast, SequenceClassifierOutput, SemanticSegmenterOutput
+from transformers.modeling_outputs import MoeModelOutputWithPast, ImageClassifierOutput, SemanticSegmenterOutput
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from attention import SelfAttention, SelfFlashAttention, VisionAttention
@@ -258,7 +258,7 @@ class VisionBitformerForImageClassification(PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, SequenceClassifierOutput]:
+    ) -> Union[Tuple, ImageClassifierOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.model(
@@ -303,7 +303,7 @@ class VisionBitformerForImageClassification(PreTrainedModel):
             output = (logits,) + transformer_outputs[1:]
             return ((loss,) + output) if loss is not None else output
 
-        return SequenceClassifierOutput(
+        return ImageClassifierOutput(
             loss=loss,
             logits=logits,
             hidden_states=transformer_outputs.hidden_states,

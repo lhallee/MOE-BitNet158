@@ -135,12 +135,11 @@ class VisionMoeBlock(nn.Module):
         if len(size) == 3:
             bs, L, d = size
             c = 1
-            hidden_states = hidden_states.view(bs, c, L, d)
         else:
             bs, c, L, d = hidden_states.size()
 
         # Reshape hidden_states to (bs, L, hidden_size * num_channels)
-        hidden_states = hidden_states.view(bs, L, -1)
+        hidden_states = hidden_states.view(bs, -1, d)
 
         # Compute router logits
         router_logits = self.router(hidden_states.to(self.router.weight.dtype))  # (bs, L, num_experts)
@@ -150,8 +149,11 @@ class VisionMoeBlock(nn.Module):
         # Topk
         topk_weights, topk_indices = torch.topk(router_probs, self.topk, dim=-1)  # (bs, topk), (bs, topk)
 
-        # Compute all expert outputs
-        expert_outputs = torch.stack([expert(hidden_states.view(bs * L, c, -1)).view(bs, L, -1) for expert in self.experts], dim=1)  # (bs, num_experts, L, hidden_size * num_channels)
+        # Compute all expert outputs # TODO fix
+        expert_outputs = torch.stack([
+            expert(hidden_states.view(bs * L, c, -1)) # think this is wrong
+                   .view(bs, L, -1)
+                   for expert in self.experts], dim=1)  # (bs, num_experts, L, hidden_size * num_channels)
 
         # Compute weighted combination of expert outputs
         topk_indices = topk_indices.unsqueeze(1).unsqueeze(-1).expand(-1, L, -1, self.hidden_size * self.num_channels)  # (bs, L, topk, hidden_size * num_channels)

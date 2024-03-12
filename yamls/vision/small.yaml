@@ -5,9 +5,9 @@ general_config:
 model_config:
   vocab_size: !!int 32000
   hidden_size: !!int 28
-  num_channels: !!int 3
-  intermediate_size: !!int 256
-  attention_size: !!int 256
+  num_channels: !!int 1
+  intermediate_size: !!int 512
+  attention_size: !!int 512
   kernel_size: !!int 7
   num_hidden_layers: !!int 1
   num_attention_heads: !!int 2

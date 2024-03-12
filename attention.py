@@ -1,8 +1,9 @@
 import math
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
-from transformers.models.mixtral.modeling_mixtral import MixtralAttention, MixtralFlashAttention2
+from transformers.models.mixtral.modeling_mixtral import MixtralAttention, MixtralFlashAttention2, apply_rotary_pos_emb
 from transformers.utils import is_flash_attn_greater_or_equal_2_10
 
 from embeddings import RotaryEmbedding
@@ -107,7 +108,11 @@ class VisionAttention(nn.Module):
         self.attention_size = config.attention_size
         self.dropout = config.attention_dropout
         self.is_causal = config.is_causal
-        #self.flash = hasattr(F, 'scaled_dot_product_attention')
+        self.rotary_emb = RotaryEmbedding(
+            (config.attention_size * config.num_channels) // self.n_head,
+            max_position_embeddings=config.max_position_embeddings,
+            base=config.rope_theta,
+        )
 
     def forward(self, hidden_states, *args, **kwargs):
         size = hidden_states.size()
@@ -125,6 +130,12 @@ class VisionAttention(nn.Module):
         k = k.view(bs, L, self.n_head, (self.attention_size * c) // self.n_head).transpose(1, 2) # (bs, nh, L, hs * c)
         q = q.view(bs, L, self.n_head, (self.attention_size * c) // self.n_head).transpose(1, 2) # (bs, nh, L, hs * c)
         v = v.view(bs, L, self.n_head, (self.attention_size * c) // self.n_head).transpose(1, 2) # (bs, nh, L, hs * c)
+
+        # Apply rotary positional embedding
+        position_ids = torch.arange(0, L, dtype=torch.long, device=q.device)
+        position_ids = position_ids.unsqueeze(0).view(-1, L)
+        cos, sin = self.rotary_emb(k, seq_len=L)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids)
 
         #y = F.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask, is_causal=self.is_causal)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
