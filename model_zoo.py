@@ -9,11 +9,11 @@ from transformers import (
     MixtralForSequenceClassification,
     PreTrainedModel
 )
-from transformers.modeling_outputs import MoeModelOutputWithPast, SequenceClassifierOutput
+from transformers.modeling_outputs import MoeModelOutputWithPast, SequenceClassifierOutput, SemanticSegmenterOutput
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from attention import SelfAttention, SelfFlashAttention, SelfVisionAttention
-from moe_blocks import SentenceTopKMoeBlock, TokenTopKMoeBlock, MLP
+from attention import SelfAttention, SelfFlashAttention, VisionAttention
+from moe_blocks import SentenceTopKMoeBlock, TokenTopKMoeBlock, VisionMoeBlock, MLP
 
 
 class RMSNorm(nn.Module):
@@ -41,7 +41,7 @@ class BitformerLayer(nn.Module):
             self.self_attn = SelfFlashAttention(config, layer_idx=layer_idx)
         elif config.attention_type == 'vision':
             config._attn_implementation = 'sdpa'
-            self.self_attn = SelfVisionAttention(config, layer_idx=layer_idx)
+            self.self_attn = VisionAttention(config)
         else:
             config._attn_implementation = 'sdpa'
             self.self_attn = SelfAttention(config, layer_idx=layer_idx)
@@ -50,6 +50,8 @@ class BitformerLayer(nn.Module):
         if config.moe:
             if config.is_causal:
                 self.MLP = TokenTopKMoeBlock(config)
+            elif config.attention_type == 'vision':
+                self.MLP = VisionMoeBlock(config)
             else:
                 self.MLP = SentenceTopKMoeBlock(config)
         else:
@@ -195,7 +197,7 @@ class VisionBitformer(MixtralModel):
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        batch_size, seq_length, _ = inputs_embeds.shape
+        seq_length = inputs_embeds.shape[-2]
         position_ids = torch.arange(0, seq_length, dtype=torch.long, device=inputs_embeds.device)
         position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
@@ -267,6 +269,9 @@ class VisionBitformerForImageClassification(PreTrainedModel):
         )
 
         hidden_states = transformer_outputs[0]
+        size = hidden_states.size()
+        bs, d = size[0], size[-1]
+        hidden_states = hidden_states.view(bs, -1, d)
         pooled_output = hidden_states.max(dim=1).values # max pooling
         logits = self.score(pooled_output)
 
@@ -299,6 +304,62 @@ class VisionBitformerForImageClassification(PreTrainedModel):
             return ((loss,) + output) if loss is not None else output
 
         return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=transformer_outputs.hidden_states,
+            attentions=transformer_outputs.attentions,
+        )
+    
+
+class VisionBitformerForSemanticSegmentation(PreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = VisionBitformer(config)
+        self.num_labels = config.num_labels
+        self.kernel_size = config.kernel_size
+        self.stride = 1
+        self.padding = (self.kernel_size - 1) // 2
+        self.conv_seg = nn.Conv2d(
+            config.num_channels,
+            self.num_labels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+        )
+        self.post_init()
+
+    def forward(
+        self,
+        inputs_embeds: torch.FloatTensor,
+        labels: Optional[torch.LongTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SemanticSegmenterOutput]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        transformer_outputs = self.model(
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        hidden_states = transformer_outputs[0] # (bs, c, h, w)
+        print(hidden_states.shape)
+        logits = self.conv_seg(hidden_states)
+        print(logits.shape)
+        loss = None
+        if labels is not None:
+            labels = labels.to(logits.device)
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        if not return_dict:
+            output = (logits,) + transformer_outputs[1:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SemanticSegmenterOutput(
             loss=loss,
             logits=logits,
             hidden_states=transformer_outputs.hidden_states,

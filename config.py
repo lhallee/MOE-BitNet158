@@ -10,6 +10,7 @@ class BitformerConfig(PretrainedConfig):
         vocab_size=32000,
         hidden_size=768,
         intermediate_size=2048,
+        attention_size=1024,
         num_hidden_layers=12,
         num_attention_heads=8,
         num_key_value_heads=8,
@@ -60,6 +61,7 @@ class BitformerConfig(PretrainedConfig):
         self.output_router_logits = output_router_logits
         self.router_aux_loss_coef = router_aux_loss_coef
 
+        self.attention_size = attention_size # for vision models
         self.attention_type = attention_type
         self.is_causal = is_causal
         self.moe = moe

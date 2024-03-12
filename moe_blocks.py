@@ -114,3 +114,51 @@ class SentenceTopKMoeBlock(nn.Module):
         expert_outputs = (expert_outputs * topk_weights.unsqueeze(1).unsqueeze(-1)).sum(dim=2).to(h_type)  # (bs, L, hidden_size)
 
         return expert_outputs, router_logits  # (bs, L, hidden_size), (bs, num_experts)
+    
+
+class VisionMoeBlock(nn.Module):
+    def __init__(self, config):
+        """
+        Sentence level MoE, topk expert aggregated
+        """
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.num_experts = config.num_local_experts
+        self.topk = config.num_experts_per_tok
+        self.num_channels = config.num_channels
+        self.router = nn.Linear(self.hidden_size * self.num_channels, self.num_experts, bias=False)
+        self.experts = nn.ModuleList([MLP(config) for _ in range(self.num_experts)])
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        h_type = hidden_states.dtype
+        size = hidden_states.size()
+        if len(size) == 3:
+            bs, L, d = size
+            c = 1
+            hidden_states = hidden_states.view(bs, c, L, d)
+        else:
+            bs, c, L, d = hidden_states.size()
+
+        # Reshape hidden_states to (bs, L, hidden_size * num_channels)
+        hidden_states = hidden_states.view(bs, L, -1)
+
+        # Compute router logits
+        router_logits = self.router(hidden_states.to(self.router.weight.dtype))  # (bs, L, num_experts)
+        router_logits = router_logits.mean(dim=1)  # Average across L dimension (bs, num_experts)
+        router_probs = router_logits.softmax(dim=-1)  # (bs, num_experts)
+
+        # Topk
+        topk_weights, topk_indices = torch.topk(router_probs, self.topk, dim=-1)  # (bs, topk), (bs, topk)
+
+        # Compute all expert outputs
+        expert_outputs = torch.stack([expert(hidden_states.view(bs * L, c, -1)).view(bs, L, -1) for expert in self.experts], dim=1)  # (bs, num_experts, L, hidden_size * num_channels)
+
+        # Compute weighted combination of expert outputs
+        topk_indices = topk_indices.unsqueeze(1).unsqueeze(-1).expand(-1, L, -1, self.hidden_size * self.num_channels)  # (bs, L, topk, hidden_size * num_channels)
+        expert_outputs = expert_outputs.gather(1, topk_indices)  # (bs, L, topk, hidden_size * num_channels)
+        expert_outputs = (expert_outputs * topk_weights.unsqueeze(1).unsqueeze(-1)).sum(dim=2).to(h_type)  # (bs, L, hidden_size * num_channels)
+
+        # Reshape expert_outputs back to (bs, c, L, hidden_size)
+        expert_outputs = expert_outputs.view(bs, c, L, -1)
+
+        return expert_outputs, router_logits  # (bs, c, L, hidden_size), (bs, num_experts)

@@ -4,6 +4,9 @@ import torch.nn.functional as F
 
 
 # Adapted from https://github.com/AlarioAI/BitNet/blob/main/bitnet/bitlinear.py
+# Fastest version on average I've found
+# Casting to half precision before matmul speeds up on most gpus and tensor sizes
+# Even bitsandbytes int4 matmul is slower
 class BitLinear(nn.Linear):
     def __init__(
         self,
