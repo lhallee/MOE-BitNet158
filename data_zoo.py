@@ -31,9 +31,9 @@ class VisionDataset(TorchDataset):
 
 
 def vision_collator(batch):
-    embeds = torch.stack([item['inputs_embeds'].squeeze(0) for item in batch])
+    imgs = torch.stack([item['img'].squeeze(0) for item in batch])
     labels = torch.tensor([item['labels'] for item in batch])
-    return {'inputs_embeds': embeds, 'labels': labels}
+    return {'img': imgs, 'labels': labels}
 
 
 def get_vision_dataset(data_path, norm=True):

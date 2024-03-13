@@ -58,6 +58,7 @@ class BitformerLayer(nn.Module):
             self.MLP = MLP
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.attention_type = config.attention_type
 
     def forward(
         self,
@@ -70,6 +71,13 @@ class BitformerLayer(nn.Module):
         use_cache: Optional[bool] = False,
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+
+        if self.attention_type == 'vision':
+            size = hidden_states.size()
+            if len(size) == 3:
+                bs, L, d = size
+                hidden_states = hidden_states.view(bs, 1, L, d)
+
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -170,6 +178,91 @@ class BitformerForSequenceClassification(PreTrainedModel):
         return self.model(*args, **kwargs)
 
 
+class ClassificationHead(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(args.hidden_size, args.num_classes)
+
+    def forward(self, x): # (bs, c, L, L) to (bs, num_classes)
+        x = self.avg_pool(x) # (bs, c, 1, 1)
+        x = self.flatten(x) # (bs, c)
+        x = self.fc(x) # (bs, num_classes)
+        return x
+
+
+class SegmentationHead(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.conv = nn.Conv2d(args.hidden_size, args.num_classes, kernel_size=1)
+
+    def forward(self, x): # (bs, c, L, L) to (bs, num_classes, L, L)
+        x = self.conv(x)
+        return x
+
+
+class ClassificationOutput(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.head = ClassificationHead(args)
+        self.num_classes = args.num_classes
+
+    def forward(self, logits, labels=None): # (bs, num_classes), (bs, 1)
+        loss = None
+        if labels is not None:
+            labels = labels.to(logits.device)
+            if self.config.problem_type is None:
+                if self.num_classes == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_classes > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                if self.num_classes == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_classes), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+
+        return ImageClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=None,
+            attentions=None,
+        )
+
+
+class SegmentationOutput(nn.Module):
+    def __init__(self, args, criterion=None):
+        super().__init__()
+        if criterion == None:
+            self.criterion = CrossEntropyLoss()
+        else:
+            self.criterion = criterion
+
+    def forward(self, logits, labels=None): # (bs, num_classes, L, L), (bs, L, L)
+        loss = None
+        if labels is not None:
+            labels = labels.to(logits.device)
+            loss = self.criterion(logits, labels)
+
+        return SemanticSegmenterOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=None,
+            attentions=None,
+        )
+
+
 class VisionBitformer(MixtralModel):
     # No tokenization, requires that hidden_size is image size and consistent
     def __init__(self, config):
@@ -210,7 +303,6 @@ class VisionBitformer(MixtralModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-
             layer_outputs = decoder_layer(
                 hidden_states,
                 position_ids=position_ids,
@@ -244,16 +336,17 @@ class VisionBitformer(MixtralModel):
     
 
 class VisionBitformerForImageClassification(PreTrainedModel):
-    def __init__(self, config):
+    def __init__(self, config, criterion=None):
         super().__init__(config)
         self.model = VisionBitformer(config)
-        self.num_labels = config.num_labels
-        self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
+        self.num_classes = config.num_classes
+        self.head = nn.Linear(config.hidden_size, self.num_classes, bias=False)
+        self.out = ClassificationOutput(config, criterion=criterion)
         self.post_init()
 
     def forward(
         self,
-        inputs_embeds: torch.FloatTensor,
+        img: torch.FloatTensor,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -262,7 +355,7 @@ class VisionBitformerForImageClassification(PreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.model(
-            inputs_embeds=inputs_embeds,
+            img=img,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
@@ -273,64 +366,31 @@ class VisionBitformerForImageClassification(PreTrainedModel):
         bs, d = size[0], size[-1]
         hidden_states = hidden_states.view(bs, -1, d)
         pooled_output = hidden_states.max(dim=1).values # max pooling
-        logits = self.score(pooled_output)
+        logits = self.head(pooled_output)
+        return self.out(logits, labels=labels)
 
-        loss = None
-        if labels is not None:
-            labels = labels.to(logits.device)
-            if self.config.problem_type is None:
-                if self.num_labels == 1:
-                    self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
-                else:
-                    self.config.problem_type = "multi_label_classification"
-
-            if self.config.problem_type == "regression":
-                loss_fct = MSELoss()
-                if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
-                else:
-                    loss = loss_fct(logits, labels)
-            elif self.config.problem_type == "single_label_classification":
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
-                loss_fct = BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
-
-        if not return_dict:
-            output = (logits,) + transformer_outputs[1:]
-            return ((loss,) + output) if loss is not None else output
-
-        return ImageClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=transformer_outputs.hidden_states,
-            attentions=transformer_outputs.attentions,
-        )
-    
 
 class VisionBitformerForSemanticSegmentation(PreTrainedModel):
-    def __init__(self, config):
+    def __init__(self, config, criterion=None):
         super().__init__(config)
         self.model = VisionBitformer(config)
-        self.num_labels = config.num_labels
+        self.num_classes = config.num_classes
         self.kernel_size = config.kernel_size
         self.stride = 1
         self.padding = (self.kernel_size - 1) // 2
         self.conv_seg = nn.Conv2d(
             config.num_channels,
-            self.num_labels,
+            self.num_classes,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
         )
+        self.out = SegmentationOutput(config, criterion=criterion)
         self.post_init()
 
     def forward(
         self,
-        inputs_embeds: torch.FloatTensor,
+        img: torch.FloatTensor,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -339,29 +399,12 @@ class VisionBitformerForSemanticSegmentation(PreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         transformer_outputs = self.model(
-            inputs_embeds=inputs_embeds,
+            img=img,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
         hidden_states = transformer_outputs[0] # (bs, c, h, w)
-        print(hidden_states.shape)
         logits = self.conv_seg(hidden_states)
-        print(logits.shape)
-        loss = None
-        if labels is not None:
-            labels = labels.to(logits.device)
-            loss_fct = CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-
-        if not return_dict:
-            output = (logits,) + transformer_outputs[1:]
-            return ((loss,) + output) if loss is not None else output
-
-        return SemanticSegmenterOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=transformer_outputs.hidden_states,
-            attentions=transformer_outputs.attentions,
-        )
+        return self.out(logits, labels=labels)
