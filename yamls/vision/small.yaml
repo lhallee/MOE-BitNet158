@@ -1,6 +1,6 @@
 general_config:
   model_type: VisionBitformerForImageClassification
-  num_classes: !!int 10
+  num_labels: !!int 10
 
 model_config:
   vocab_size: !!int 32000

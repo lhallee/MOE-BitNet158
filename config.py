@@ -34,6 +34,7 @@ class BitformerConfig(PretrainedConfig):
         is_causal=False, #GPT or BERT
         moe=True, # MOE or not
         bitnet=True, #bitlinear or not
+        num_classes=10,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -66,6 +67,7 @@ class BitformerConfig(PretrainedConfig):
         self.is_causal = is_causal
         self.moe = moe
         self.bitnet = bitnet
+        self.num_classes = num_classes
 
         super().__init__(
             pad_token_id=pad_token_id,
