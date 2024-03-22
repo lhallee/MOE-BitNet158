@@ -1,61 +1,52 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from model_zoo import RMSNorm
 
 
-# Adapted from https://github.com/AlarioAI/BitNet/blob/main/bitnet/bitlinear.py
-# Fastest version on average I've found
-# Casting to half precision before matmul speeds up on most gpus and tensor sizes
-# Even bitsandbytes int4 matmul is slower
+# Adapted from https://github.com/microsoft/unilm/blob/master/bitnet/The-Era-of-1-bit-LLMs__Training_Tips_Code_FAQ.pdf
+def activation_quant(x):
+    """ Per-token quantization to 8 bits. No grouping is needed for quantization.
+    Args:
+    x: an activation tensor with shape [n, d]
+    Returns:
+    y: a quantized activation tensor with shape [n, d]
+    """
+    scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+    y = (x * scale).round().clamp_(-128, 127) / scale
+    return y
+
+
+def weight_quant(w):
+    """ Per-tensor quantization to 1.58 bits. No grouping is needed for quantization.
+    Args:
+    w: a weight tensor with shape [d, k]
+    Returns:
+    u: a quantized weight with shape [d, k]
+    """
+    scale = 1.0 / w.abs().mean().clamp_(min=1-5)
+    u = (w * scale).round().clamp_(-1, 1) / scale
+    return u
+
+
 class BitLinear(nn.Linear):
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = False,
-        num_bits: int = 8,
-    ):
-        super().__init__(in_features, out_features, bias)
-        self.eps:float = 1e-5
-        self.quantization_range: int = 2 ** (num_bits - 1) # Q_b in the paper
-        self.norm: nn.Module = nn.LayerNorm(in_features)
-
-
-    def ste_weights(self, weights_gamma: float) -> torch.Tensor:
-        eps: float = 1e-8
-        scaled_weights:torch.Tensor = self.weight / (weights_gamma + eps)
-        binarized_input_no_grad: torch.Tensor = torch.clamp(torch.round(scaled_weights), min=-1, max=1)
-        binarized_input_with_grad: torch.Tensor = (binarized_input_no_grad - self.weight).detach() + self.weight
-        return binarized_input_with_grad
-
-
-    def binarize_weights(self, weights_gamma: float) -> torch.Tensor:
-        binarized_weights = self.ste_weights(weights_gamma)
-        return binarized_weights
-
-
-    def quantize_activations(self, _input:torch.Tensor, input_gamma: float) -> torch.Tensor:
-        # Equation 4 BitNet paper
-        quantized_input = torch.clamp(
-                _input * self.quantization_range / input_gamma,
-                -self.quantization_range + self.eps,
-                self.quantization_range - self.eps,
-            )
-        return quantized_input
-
-
-    def dequantize_activations(self, _input: torch.Tensor, input_gamma: float, beta: float) -> torch.Tensor:
-        return _input * input_gamma * beta / self.quantization_range
-
-
-    def forward(self, _input: torch.Tensor) -> torch.Tensor:
-        normalized_input: torch.Tensor = self.norm(_input)
-        input_gamma: float = normalized_input.abs().max().item()
-        weight_abs_mean: float = self.weight.abs().mean().item()
-
-        binarized_weights = self.binarize_weights(weight_abs_mean)
-        input_quant = self.quantize_activations(normalized_input, input_gamma)
-        output = F.linear(input_quant, binarized_weights, self.bias)
-        output = self.dequantize_activations(output, input_gamma, weight_abs_mean)
-
-        return output
+    """
+    This is only for training, and kernel optimization is needed for efficiency.
+    """
+    def __init__(self, in_features, outfeatures):
+        super().__init__(in_features, outfeatures, bias=False)
+        self.rms_norm = RMSNorm(hidden_size=in_features)
+    
+    def forward(self, x):
+        """
+        Args:
+        x: an input tensor with shape [n, d]
+        Returns:
+        y: an output tensor with shape [n, d]
+        """
+        w = self.weight # a weight tensor with shape [d, k]
+        x_norm = self.rms_norm(x)
+        # A trick for implementing Straight-Through-Estimator (STE) using detach()
+        x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+        w_quant = w + (weight_quant(w) - w).detach()
+        y = F.linear(x_quant, w_quant)
+        return y

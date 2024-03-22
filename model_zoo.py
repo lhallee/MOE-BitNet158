@@ -56,8 +56,12 @@ class BitformerLayer(nn.Module):
                 self.MLP = SentenceTopKMoeBlock(config)
         else:
             self.MLP = MLP
+        
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.bitnet = config.bitnet
+        if config.bitnet:
+            self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
         self.attention_type = config.attention_type
 
     def forward(
@@ -93,9 +97,9 @@ class BitformerLayer(nn.Module):
         )
         hidden_states = residual + hidden_states
 
-        # Fully Connected
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
+        if self.bitnet:
+            hidden_states = self.post_attention_layernorm(hidden_states)
         if self.moe:
             hidden_states, router_logits = self.MLP(hidden_states)
         else:
