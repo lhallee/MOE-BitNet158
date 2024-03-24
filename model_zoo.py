@@ -98,7 +98,7 @@ class BitformerLayer(nn.Module):
         hidden_states = residual + hidden_states
 
         residual = hidden_states
-        if self.bitnet:
+        if not self.bitnet:
             hidden_states = self.post_attention_layernorm(hidden_states)
         if self.moe:
             hidden_states, router_logits = self.MLP(hidden_states)
