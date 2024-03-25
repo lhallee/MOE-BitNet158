@@ -11,11 +11,9 @@ Also flash-attn if you are going to use the SelfFlashAttention class - `config._
 Training scripts, vision version, and documentation coming soon!
 
 ## TO DO:
-- [x] MOE-bitnet - 3/9/24 - Logan Hallee 
-- [ ] Training script with huggingface trainer
-- [ ] Training script with normal pytorch loop
-- [ ] Vision implementation
-- [ ] Data streaming using Dolma
+- [x] MOE-bitnet - 3/9/24 - Logan
+- [x] Training script with Huggingface trainer - 3/24/24 - Logan
 - [ ] Produce convergence graphs
 - [ ] Evaluation pipelines - MMLU, PubmedQA, etc.
+- [ ] Fine-tuning pipelines - Classification
 - [ ] Try protein language objectives
