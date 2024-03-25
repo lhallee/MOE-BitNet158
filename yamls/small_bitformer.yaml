@@ -3,7 +3,7 @@ general_config:
   patience: !!int 3
 
 model_config:
-  vocab_size: !!int 50304
+  vocab_size: !!int 32000
   hidden_size: !!int 512
   intermediate_size: !!int 2048
   num_hidden_layers: !!int 12
@@ -42,6 +42,7 @@ training_args:
   learning_rate: !!float 0.005
   weight_decay: !!float 0.01
   num_train_epochs: !!int 1
+  max_steps: !!int 100
   warmup_ratio: !!float 0.0
   warmup_steps: !!int 100
   lr_scheduler_type: !!str cosine

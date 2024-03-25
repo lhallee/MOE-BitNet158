@@ -1,4 +1,4 @@
-from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
+from transformers import Trainer, TrainingArguments, EarlyStoppingCallback, DataCollatorForLanguageModeling
 
 
 def fine_tune_trainer(model,
@@ -26,12 +26,16 @@ def fine_tune_trainer(model,
 def pretrain_trainer(model,
                      train_dataset,
                      tokenizer,
+                     mlm,
                      *args, **kwargs):
     training_args = TrainingArguments(*args, **kwargs)
     trainer = Trainer(
         model=model,
         args=training_args,
         tokenizer=tokenizer,
+        data_collator=DataCollatorForLanguageModeling(mlm=mlm,
+                                                      mlm_probability=0.25,
+                                                      tokenizer=tokenizer),
         train_dataset=train_dataset,
     )
     return trainer
