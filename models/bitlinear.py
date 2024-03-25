@@ -1,6 +1,23 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model_zoo import RMSNorm
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        MixtralRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
 
 
 # Adapted from https://github.com/microsoft/unilm/blob/master/bitnet/The-Era-of-1-bit-LLMs__Training_Tips_Code_FAQ.pdf
@@ -32,8 +49,8 @@ class BitLinear(nn.Linear):
     """
     This is only for training, and kernel optimization is needed for efficiency.
     """
-    def __init__(self, in_features, outfeatures):
-        super().__init__(in_features, outfeatures, bias=False)
+    def __init__(self, in_features, outfeatures, bias=False):
+        super().__init__(in_features, outfeatures, bias=bias)
         self.rms_norm = RMSNorm(hidden_size=in_features)
     
     def forward(self, x):

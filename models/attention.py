@@ -1,17 +1,14 @@
-import math
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 from transformers.models.mixtral.modeling_mixtral import MixtralAttention, MixtralFlashAttention2, apply_rotary_pos_emb
 from transformers.utils import is_flash_attn_greater_or_equal_2_10
 
-from embeddings import RotaryEmbedding
-from bitlinear import BitLinear
+from .embeddings import RotaryEmbedding
+from .bitlinear import BitLinear
 
 
 class SelfAttention(MixtralAttention):
-
     def __init__(self, config, layer_idx: Optional[int] = None):
         super().__init__(config, layer_idx)
         self.config = config
@@ -50,7 +47,6 @@ class SelfAttention(MixtralAttention):
 
 
 class SelfFlashAttention(MixtralFlashAttention2):
-
     def __init__(self, config, layer_idx: Optional[int] = None):
         super().__init__(config, layer_idx)
         self.config = config
@@ -87,57 +83,3 @@ class SelfFlashAttention(MixtralFlashAttention2):
             base=self.rope_theta,
         )
         self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
-        
-
-class VisionAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        assert config.attention_size % config.num_attention_heads == 0
-        if config.bitnet:
-            Linear = BitLinear
-        else:
-            Linear = nn.Linear
-        self.qkv = Linear(config.num_channels * config.hidden_size,
-                          3 * config.attention_size * config.num_channels,
-                          bias=False)
-        self.o = Linear(config.num_channels * config.attention_size,
-                        config.hidden_size * config.num_channels,
-                        bias=False)
-        self.n_head = config.num_attention_heads
-        self.hidden_size = config.hidden_size
-        self.attention_size = config.attention_size
-        self.dropout = config.attention_dropout
-        self.is_causal = config.is_causal
-        self.rotary_emb = RotaryEmbedding(
-            (config.attention_size * config.num_channels) // self.n_head,
-            max_position_embeddings=config.max_position_embeddings,
-            base=config.rope_theta,
-        )
-
-    def forward(self, hidden_states, *args, **kwargs):
-        bs, c, L, d = hidden_states.size()
-        # Reshape hidden_states to (bs * c, L, d)
-        hidden_states = hidden_states.view(bs, L, d * c)
-        
-        q, k, v = self.qkv(hidden_states).split(self.attention_size * c, dim=-1) # (bs, L, hs * c)
-        k = k.view(bs, L, self.n_head, (self.attention_size * c) // self.n_head).transpose(1, 2) # (bs, nh, L, hs * c)
-        q = q.view(bs, L, self.n_head, (self.attention_size * c) // self.n_head).transpose(1, 2) # (bs, nh, L, hs * c)
-        v = v.view(bs, L, self.n_head, (self.attention_size * c) // self.n_head).transpose(1, 2) # (bs, nh, L, hs * c)
-
-        # Apply rotary positional embedding
-        position_ids = torch.arange(0, L, dtype=torch.long, device=q.device)
-        position_ids = position_ids.unsqueeze(0).view(-1, L)
-        cos, sin = self.rotary_emb(k, seq_len=L)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids=position_ids)
-
-        #y = F.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask, is_causal=self.is_causal)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = F.softmax(att, dim=-1)
-        y = att @ v # (bs, nh, L, L) x (bs, nh, L, hs * c) -> (bs, nh, L, hs * c)
-
-        y = y.transpose(1, 2).contiguous().view(bs, L, self.attention_size * c)
-        y = self.o(y)
-        
-        # Reshape y back to (bs, c, L, d)
-        y = y.view(bs, c, L, d)
-        return y, att, None

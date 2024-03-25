@@ -5,7 +5,6 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 
 
 def compute_metrics_single_label_classification(p: EvalPrediction):
-
     preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
     labels = p.label_ids[1] if isinstance(p.label_ids, tuple) else p.label_ids
     try:
@@ -34,3 +33,19 @@ def compute_metrics_single_label_classification(p: EvalPrediction):
         'recall': best_recall,
         'accuracy': accuracy,
     }
+
+
+def compute_metrics_mlm(p: EvalPrediction):
+    preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
+    labels = p.label_ids[1] if isinstance(p.label_ids, tuple) else p.label_ids
+
+    logits = np.array(preds)
+    labels = np.array(labels)
+
+    preds = np.argmax(logits, axis=-1)
+    valid_indices = (labels != -100)
+    valid_preds = preds[valid_indices]
+    valid_labels = labels[valid_indices]
+
+    accuracy = np.mean(valid_preds == valid_labels)
+    return {'mlm_accuracy': accuracy}
